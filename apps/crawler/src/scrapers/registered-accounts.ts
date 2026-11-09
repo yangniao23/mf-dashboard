@@ -1,17 +1,13 @@
 import type { RegisteredAccounts, AccountStatus } from "@mf-dashboard/db/types";
-import { mfUrls } from "@mf-dashboard/meta/urls";
 import type { Page } from "playwright";
 import { debug } from "../logger.js";
 import { parseJapaneseNumber } from "../parsers.js";
+import { ensureAccountPage } from "../auth/account-page.js";
 
 export async function getRegisteredAccounts(page: Page): Promise<RegisteredAccounts> {
   debug("Getting registered accounts from /accounts page...");
 
-  await page.goto(mfUrls.accounts, {
-    waitUntil: "domcontentloaded",
-  });
-  // テーブルが表示されるまで待機
-  await page.locator("#account-table").first().waitFor({ state: "visible", timeout: 10000 });
+  await ensureAccountPage(page);
 
   const accounts: AccountStatus[] = [];
 

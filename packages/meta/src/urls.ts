@@ -1,37 +1,95 @@
-const BASE_URL = "https://moneyforward.com";
+export type MfService = "me" | "linkx";
+export interface MfEnvironment {
+  MF_SERVICE?: string;
+}
+
+const ME_BASE_URL = "https://moneyforward.com";
 const ID_BASE_URL = "https://id.moneyforward.com";
+const LINKX_BASE_URL = "https://linkx.x.moneyforward.com";
+
+/**
+ * Select the Money Forward service without reading the environment at module
+ * load time. The crawler loads `.env` after its modules are imported.
+ */
+function getRuntimeEnv(): MfEnvironment {
+  const runtime = globalThis as typeof globalThis & {
+    process?: { env?: MfEnvironment };
+  };
+  return runtime.process?.env ?? {};
+}
+
+export function getMfService(env: MfEnvironment = getRuntimeEnv()): MfService {
+  const service = env.MF_SERVICE?.trim().toLowerCase() || "me";
+  if (service === "me" || service === "linkx") {
+    return service;
+  }
+
+  throw new Error(`Unsupported MF_SERVICE: ${service}`);
+}
+
+export function isLinkxService(env: MfEnvironment = getRuntimeEnv()): boolean {
+  return getMfService(env) === "linkx";
+}
+
+function getBaseUrl(): string {
+  return isLinkxService() ? LINKX_BASE_URL : ME_BASE_URL;
+}
 
 export const mfUrls = {
   /** トップページ */
-  home: `${BASE_URL}/`,
+  get home() {
+    return `${getBaseUrl()}/`;
+  },
   /** 家計簿（収支詳細） */
-  cashFlow: `${BASE_URL}/cf`,
+  get cashFlow() {
+    return `${getBaseUrl()}/cf`;
+  },
   /** 家計簿（月次収支） */
-  monthlyCashFlow: `${BASE_URL}/cf/monthly`,
+  get monthlyCashFlow() {
+    return `${getBaseUrl()}/cf/monthly`;
+  },
   /** 資産推移 */
-  assetHistory: `${BASE_URL}/bs/history`,
+  get assetHistory() {
+    return `${getBaseUrl()}/bs/history`;
+  },
   /** ポートフォリオ */
-  portfolio: `${BASE_URL}/bs/portfolio`,
+  get portfolio() {
+    return `${getBaseUrl()}/bs/portfolio`;
+  },
   /** 負債 */
-  liability: `${BASE_URL}/bs/liability`,
+  get liability() {
+    return `${getBaseUrl()}/bs/liability`;
+  },
   /** 口座一覧 */
-  accounts: `${BASE_URL}/accounts`,
+  get accounts() {
+    return `${getBaseUrl()}/accounts`;
+  },
   /** 予算 */
-  spendingTargets: `${BASE_URL}/spending_targets/edit`,
+  get spendingTargets() {
+    return `${getBaseUrl()}/spending_targets/edit`;
+  },
   /** カテゴリ設定 */
-  categoryRules: `${BASE_URL}/profile/rule`,
-  /** ME ログイン */
-  signIn: `${BASE_URL}/sign_in`,
+  get categoryRules() {
+    return `${getBaseUrl()}/profile/rule`;
+  },
+  /** ログイン */
+  get signIn() {
+    return isLinkxService() ? `${getBaseUrl()}/users/sign_in` : `${getBaseUrl()}/sign_in`;
+  },
 
   auth: {
-    /** MFID ログインページ */
-    signIn: `${ID_BASE_URL}/sign_in`,
+    /** MFID / サービス固有ログインページ */
+    get signIn() {
+      return isLinkxService() ? `${getBaseUrl()}/users/sign_in` : `${ID_BASE_URL}/sign_in`;
+    },
     /** MFID パスワード入力ページ */
-    password: `${ID_BASE_URL}/sign_in/password`,
+    get password() {
+      return isLinkxService() ? `${getBaseUrl()}/users/sign_in` : `${ID_BASE_URL}/sign_in/password`;
+    },
   },
 
   /** 口座詳細ページURL を生成 */
   accountDetail(mfId: string, type: "show" | "show_manual" = "show"): string {
-    return `${BASE_URL}/accounts/${type}/${mfId}`;
+    return `${getBaseUrl()}/accounts/${type}/${mfId}`;
   },
 } as const;

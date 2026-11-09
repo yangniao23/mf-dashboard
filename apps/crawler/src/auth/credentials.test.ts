@@ -3,19 +3,24 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 type AnyMock = (...args: any[]) => any;
 
 // Use vi.hoisted to create mock before hoisting
-const { mockResolve, mockCreateClient } = vi.hoisted(() => {
+const { mockResolve, mockCreateClient, mockExecFile } = vi.hoisted(() => {
   const mockResolve = vi.fn<AnyMock>();
   const mockCreateClient = vi.fn<AnyMock>().mockResolvedValue({
     secrets: {
       resolve: mockResolve,
     },
   });
-  return { mockResolve, mockCreateClient };
+  const mockExecFile = vi.fn<AnyMock>();
+  return { mockResolve, mockCreateClient, mockExecFile };
 });
 
 // Mock 1Password SDK
 vi.mock("@1password/sdk", () => ({
   createClient: mockCreateClient,
+}));
+
+vi.mock("node:child_process", () => ({
+  execFile: mockExecFile,
 }));
 
 // Mock process.exit
@@ -30,6 +35,7 @@ describe("credentials", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecFile.mockReset();
     _resetOpClient();
     process.env = {
       ...originalEnv,
@@ -37,6 +43,7 @@ describe("credentials", () => {
       OP_VAULT: "test-vault",
       OP_ITEM: "test-item",
       OP_TOTP_FIELD: "totp",
+      CREDENTIAL_PROVIDER: "1password",
     };
   });
 
@@ -96,6 +103,64 @@ describe("credentials", () => {
       mockResolve.mockResolvedValue("");
 
       await expect(getOTP()).rejects.toThrow("OTP の取得に失敗しました");
+    });
+  });
+
+  describe("Bitwarden", () => {
+    beforeEach(() => {
+      process.env.CREDENTIAL_PROVIDER = "bitwarden";
+      process.env.BW_ITEM_ID = "test-bitwarden-item";
+      process.env.BW_CLI_PATH = "/path/to/bw";
+    });
+
+    test("returns credentials from a Bitwarden Login item", async () => {
+      mockExecFile.mockImplementation(
+        (_file: string, args: string[], _options: unknown, callback: AnyMock) => {
+          expect(args).toEqual(["get", "item", "test-bitwarden-item"]);
+          callback(
+            null,
+            JSON.stringify({
+              login: {
+                username: "sompo-user@example.com",
+                password: "test-password",
+              },
+            }),
+          );
+        },
+      );
+
+      await expect(getCredentials()).resolves.toEqual({
+        username: "sompo-user@example.com",
+        password: "test-password",
+      });
+      expect(mockExecFile).toHaveBeenCalledWith(
+        "/path/to/bw",
+        ["get", "item", "test-bitwarden-item"],
+        expect.objectContaining({ maxBuffer: 1024 * 1024 }),
+        expect.any(Function),
+      );
+    });
+
+    test("does not expose Bitwarden command output when item lookup fails", async () => {
+      mockExecFile.mockImplementation(
+        (_file: string, _args: string[], _options: unknown, callback: AnyMock) => {
+          callback(new Error("secret-looking failure"), "", "secret-looking stderr");
+        },
+      );
+
+      await expect(getCredentials()).rejects.toThrow("Failed to read the Bitwarden item");
+      await expect(getCredentials()).rejects.not.toThrow("secret-looking");
+    });
+
+    test("reports that the Login item has no usable TOTP", async () => {
+      mockExecFile.mockImplementation(
+        (_file: string, args: string[], _options: unknown, callback: AnyMock) => {
+          expect(args).toEqual(["get", "totp", "test-bitwarden-item"]);
+          callback(new Error("item has no totp"), "", "");
+        },
+      );
+
+      await expect(getOTP()).rejects.toThrow("Bitwarden item has no usable TOTP");
     });
   });
 });

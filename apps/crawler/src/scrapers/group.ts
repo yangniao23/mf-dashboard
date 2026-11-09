@@ -175,6 +175,12 @@ export async function switchGroup(page: Page, groupId: string): Promise<Group | 
 
   const groupSelect = await getGroupSelector(page);
   if (!groupSelect) {
+    // Linkx omits the selector entirely when no household groups are configured.
+    // In that layout the visible page already represents the ungrouped view.
+    if (isNoGroup(groupId)) {
+      debug("Group selector absent; treating the current page as the no-group view");
+      return { id: NO_GROUP_ID, name: "グループ選択なし", isCurrent: true };
+    }
     throw new Error("Group selector not found");
   }
 

@@ -3,10 +3,8 @@ import type { Db } from "@mf-dashboard/db";
 import { findExistingTransactionMfIds } from "@mf-dashboard/db/repository/transactions";
 import type { CashFlowItem, CashFlowSummary } from "@mf-dashboard/db/types";
 import type { Page } from "playwright";
-import { getCsrfToken } from "../hooks/helpers.js";
-import { info, warn } from "../logger.js";
+import { warn } from "../logger.js";
 import { scrapeCategoryCandidates } from "../scrapers/category-candidates.js";
-import { applyCategoryDecisions } from "./apply.js";
 import { CategoryDecisionEngine, selectTransactionsForCategorization } from "./engine.js";
 import type {
   CategoryDecisionUsage,
@@ -120,23 +118,9 @@ export async function categorizeCashFlowMonth(options: {
       return cashFlow;
     }
 
-    const csrfToken = await getCsrfToken(page);
-    if (!csrfToken) {
-      warn("Skipped category update because CSRF token was not found.");
-      return cashFlow;
-    }
-
-    const { appliedCount, appliedDecisions } = await applyCategoryDecisions({
-      page,
-      csrfToken,
-      decisions,
-    });
-    if (appliedCount === 0) {
-      return cashFlow;
-    }
-
-    info(`Applied category decisions: ${appliedCount}/${decisions.length} for ${cashFlow.month}`);
-    return applyDecisionsToCashFlow(cashFlow, appliedDecisions);
+    // The ordinary crawler is read-only with respect to Money Forward. Apply
+    // decisions only to the in-memory snapshot that is saved to SQLite.
+    return applyDecisionsToCashFlow(cashFlow, decisions);
   } catch {
     warn(
       `Category decision failed for ${cashFlow.month}; saving scraped cash flow (code: CATEGORY_DECISION_PIPELINE_FAILED).`,

@@ -1,9 +1,10 @@
-import { mfUrls } from "@mf-dashboard/meta/urls";
+import { isLinkxService, mfUrls } from "@mf-dashboard/meta/urls";
 import type { BrowserContext, Page } from "playwright";
 import { log, debug } from "../logger.js";
 import { navigateToAccountsPage } from "../scrapers/refresh.js";
 import { getCredentials, getOTP } from "./credentials.js";
 import { hasAuthState, saveAuthState } from "./state.js";
+import { ensureAccountPage } from "./account-page.js";
 
 const TIMEOUTS = {
   redirect: 2000,
@@ -24,6 +25,12 @@ const SELECTORS = {
   mfidOtpSubmit: '#submitto, button:text-is("認証する"), button:text-is("Verify")',
   mePassword: 'input[type="password"]',
   meSignIn: 'button:has-text("Sign in")',
+  linkxEmail: 'input[name="sign_in_session_service[email]"]',
+  linkxPassword: 'input[name="sign_in_session_service[password]"]',
+  linkxSubmit: "#login-btn-sumit",
+  linkxOtpInput:
+    'input[autocomplete="one-time-code"], input[name*="otp" i], input[name*="one_time" i], input[id*="otp" i], input[id*="one_time" i]',
+  linkxOtpSubmit: 'input[type="submit"], button[type="submit"]',
 };
 
 function isLoggedInUrl(url: string): boolean {
@@ -89,6 +96,10 @@ async function isSessionValid(page: Page): Promise<boolean> {
   debug("Checking if session is valid...");
 
   try {
+    if (isLinkxService()) {
+      await ensureAccountPage(page);
+      return true;
+    }
     // Navigate to a page that requires an authenticated Money Forward ME session.
     // The public home page cannot prove that the session is valid.
     await navigateToAccountsPage(page);
@@ -139,7 +150,55 @@ export async function loginWithAuthState(page: Page, context: BrowserContext): P
   await saveAuthState(context);
 }
 
-export async function login(page: Page): Promise<void> {
+async function loginLinkx(page: Page): Promise<void> {
+  const { username, password } = await getCredentials();
+
+  debug("Navigating to Linkx login page...");
+  await page.goto(mfUrls.auth.signIn, {
+    waitUntil: "domcontentloaded",
+    timeout: TIMEOUTS.login,
+  });
+
+  const emailInput = page.locator(SELECTORS.linkxEmail);
+  await emailInput.waitFor({ state: "visible", timeout: TIMEOUTS.medium });
+  await emailInput.fill(username);
+
+  const passwordInput = page.locator(SELECTORS.linkxPassword);
+  await passwordInput.waitFor({ state: "visible", timeout: TIMEOUTS.medium });
+  await passwordInput.fill(password);
+
+  await page.locator(SELECTORS.linkxSubmit).click();
+  await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+  if (!isLoggedInUrl(page.url())) {
+    const otpInput = page.locator(SELECTORS.linkxOtpInput).first();
+    const otpRequired = await otpInput.isVisible({ timeout: TIMEOUTS.short }).catch(() => false);
+
+    if (otpRequired) {
+      let otp: string;
+      try {
+        otp = await getOTP();
+      } catch {
+        throw new Error(
+          "Linkx login requires an OTP, but no usable TOTP is configured in Bitwarden",
+        );
+      }
+
+      await otpInput.fill(otp);
+      await page.locator(SELECTORS.linkxOtpSubmit).first().click();
+      await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    }
+  }
+
+  if (!isLoggedInUrl(page.url())) {
+    throw new Error("Linkx login did not complete; additional verification may be required");
+  }
+
+  await ensureAccountPage(page);
+  log("Linkx login successful!");
+}
+
+async function loginStandard(page: Page): Promise<void> {
   const { username, password } = await getCredentials();
 
   debug("Navigating to login page...");
@@ -260,4 +319,13 @@ export async function login(page: Page): Promise<void> {
   }
 
   log("Login successful!");
+}
+
+export async function login(page: Page): Promise<void> {
+  if (isLinkxService()) {
+    await loginLinkx(page);
+    return;
+  }
+
+  await loginStandard(page);
 }

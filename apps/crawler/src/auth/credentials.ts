@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createClient, type Client } from "@1password/sdk";
 import { debug, error } from "../logger.js";
 
@@ -6,11 +7,112 @@ interface Credentials {
   password: string;
 }
 
+interface BitwardenItem {
+  login?: {
+    username?: unknown;
+    password?: unknown;
+  };
+  fields?: Array<{
+    name?: unknown;
+    value?: unknown;
+  }>;
+}
+
+type CredentialProvider = "1password" | "bitwarden";
+
+const BITWARDEN_MAX_BUFFER = 1024 * 1024;
+
 // 1Password SDK client (singleton)
 let _opClient: Client | null = null;
 
+function getCredentialProvider(env: NodeJS.ProcessEnv = process.env): CredentialProvider {
+  const provider = env.CREDENTIAL_PROVIDER?.trim().toLowerCase() || "1password";
+  if (provider === "bitwarden" || provider === "1password") {
+    return provider;
+  }
+
+  throw new Error(`Unsupported credential provider: ${provider}`);
+}
+
+function getBitwardenItemId(env: NodeJS.ProcessEnv = process.env): string {
+  const itemId = env.BW_ITEM_ID?.trim();
+  if (!itemId) {
+    throw new Error("BW_ITEM_ID is not set");
+  }
+  return itemId;
+}
+
+function getBitwardenCliPath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.BW_CLI_PATH?.trim() || "bw";
+}
+
+function runBitwarden(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      getBitwardenCliPath(),
+      args,
+      {
+        env: process.env,
+        maxBuffer: BITWARDEN_MAX_BUFFER,
+        windowsHide: true,
+      },
+      (error, stdout) => {
+        if (error) {
+          // Do not include stderr or command output: Bitwarden output may contain secrets.
+          reject(new Error("Bitwarden CLI command failed"));
+          return;
+        }
+
+        resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+async function getBitwardenItem(): Promise<BitwardenItem> {
+  const itemId = getBitwardenItemId();
+  let raw: string;
+
+  try {
+    raw = await runBitwarden(["get", "item", itemId]);
+  } catch {
+    throw new Error("Failed to read the Bitwarden item");
+  }
+
+  try {
+    return JSON.parse(raw) as BitwardenItem;
+  } catch {
+    throw new Error("Bitwarden returned invalid item data");
+  }
+}
+
+function requiredString(value: unknown, fieldName: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`Bitwarden item field is empty: ${fieldName}`);
+  }
+  return value;
+}
+
+async function getBitwardenCredentials(): Promise<Credentials> {
+  const item = await getBitwardenItem();
+  return {
+    username: requiredString(item.login?.username, "username"),
+    password: requiredString(item.login?.password, "password"),
+  };
+}
+
+async function getBitwardenOtp(): Promise<string> {
+  const itemId = getBitwardenItemId();
+
+  try {
+    return requiredString(await runBitwarden(["get", "totp", itemId]), "TOTP");
+  } catch {
+    throw new Error("Bitwarden item has no usable TOTP");
+  }
+}
+
 /**
- * 1Password SDK クライアントを取得する
+ * 1Password SDKクライアントを取得する。
  */
 async function getOpClient(): Promise<Client> {
   if (_opClient) {
@@ -34,6 +136,10 @@ async function getOpClient(): Promise<Client> {
 }
 
 export async function getCredentials(): Promise<Credentials> {
+  if (getCredentialProvider() === "bitwarden") {
+    return getBitwardenCredentials();
+  }
+
   const vault = process.env.OP_VAULT || "";
   const item = process.env.OP_ITEM || "";
 
@@ -53,6 +159,10 @@ export async function getCredentials(): Promise<Credentials> {
 }
 
 export async function getOTP(): Promise<string> {
+  if (getCredentialProvider() === "bitwarden") {
+    return getBitwardenOtp();
+  }
+
   const vault = process.env.OP_VAULT || "";
   const item = process.env.OP_ITEM || "";
   const totpField = process.env.OP_TOTP_FIELD || "";

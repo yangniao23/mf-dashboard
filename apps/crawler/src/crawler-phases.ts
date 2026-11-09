@@ -128,8 +128,10 @@ export async function runSetupPhase(config: CrawlerConfig): Promise<CrawlerRunti
   let browser: Browser | null = null;
   try {
     log("Launching browser");
+    const browserExecutablePath = process.env.BROWSER_EXECUTABLE_PATH?.trim();
     browser = await chromium.launch({
       headless: !config.isHeaded,
+      ...(browserExecutablePath ? { executablePath: browserExecutablePath } : {}),
     });
 
     const context = await createBrowserContext(browser, { useAuthState: true });

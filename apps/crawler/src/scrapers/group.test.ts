@@ -59,6 +59,44 @@ describe("createGroupScope", () => {
 });
 
 describe("switchGroup", () => {
+  test("セレクタがないLinkx画面ではno-groupへ切替済みとして扱う", async () => {
+    const missingSelect = {
+      count: vi.fn<() => Promise<number>>(async () => 0),
+      isVisible: vi.fn<() => Promise<boolean>>(async () => false),
+      waitFor: vi.fn<() => Promise<void>>(async () => {
+        throw new Error("not found");
+      }),
+    };
+    const page = {
+      goto: vi.fn<() => Promise<null>>(async () => null),
+      locator: vi.fn<() => typeof missingSelect>(() => missingSelect),
+    } as unknown as Page;
+
+    await expect(switchGroup(page, NO_GROUP_ID)).resolves.toEqual({
+      id: NO_GROUP_ID,
+      name: "グループ選択なし",
+      isCurrent: true,
+    });
+  });
+
+  test("セレクタがない画面で実グループへの切替は拒否する", async () => {
+    const missingSelect = {
+      count: vi.fn<() => Promise<number>>(async () => 0),
+      isVisible: vi.fn<() => Promise<boolean>>(async () => false),
+      waitFor: vi.fn<() => Promise<void>>(async () => {
+        throw new Error("not found");
+      }),
+    };
+    const page = {
+      goto: vi.fn<() => Promise<null>>(async () => null),
+      locator: vi.fn<() => typeof missingSelect>(() => missingSelect),
+    } as unknown as Page;
+
+    await expect(switchGroup(page, "private-group-id")).rejects.toThrow(
+      "Group selector not found",
+    );
+  });
+
   test.each([
     {
       expectedMessage: "Group switch timed out",
